@@ -1,0 +1,50 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]   # broker/result store only; no persistence needed locally
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: devops-assessment/backend:local
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    image: devops-assessment/worker:local
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TASK_DURATION_SECONDS: ${TASK_DURATION_SECONDS:-5}
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A worker.celery_app inspect ping -d celery@$$HOSTNAME -t 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
